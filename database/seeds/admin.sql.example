@@ -1,0 +1,23 @@
+-- =====================================================================
+-- First admin account - TEMPLATE.
+--
+-- 1. Copy:    cp database/seeds/admin.sql.example database/seeds/admin.sql
+-- 2. Edit admin.sql (git-ignored): real name, email, hash, timestamps.
+--    Generate the hash with the command from Step 6 - never type the
+--    plain password into this file.
+-- 3. Import admin.sql AFTER schema.sql, into the same database.
+--
+-- Timestamps: write the current Dhaka time as a literal ('YYYY-MM-DD HH:MM:SS').
+-- Do NOT use NOW(): phpMyAdmin's session time zone may be UTC.
+-- =====================================================================
+
+SET NAMES utf8mb4;
+
+INSERT INTO admins (name, email, password, phone, created_at, updated_at) VALUES (
+    'ADMIN_FULL_NAME',
+    'admin@example.com',
+    'PASTE_PASSWORD_HASH_HERE',
+    NULL,
+    'YYYY-MM-DD HH:MM:SS',
+    'YYYY-MM-DD HH:MM:SS'
+);
