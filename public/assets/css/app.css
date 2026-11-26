@@ -1,0 +1,14 @@
+/*
+ * XIT HRM - custom styles.
+ * The CSP forbids style="..." attributes, so every custom style lives here as a class.
+ */
+
+body {
+    min-height: 100vh;
+}
+
+/* Narrow centred card for login and other guest pages. */
+.auth-card {
+    max-width: 420px;
+    margin-inline: auto;
+}
