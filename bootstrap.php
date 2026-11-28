@@ -10,14 +10,19 @@ declare(strict_types=1);
  *   3. PSR-4 autoloader (App\ -> src/)
  *   4. Settings: .env -> Env -> config/*.php -> Config
  *   5. Default time zone
- *   6. Error display + daily log file (storage/logs/app-YYYY-MM-DD.log)
+ *   6. Error logging to the daily log file (storage/logs/app-YYYY-MM-DD.log).
+ *      PHP never DISPLAYS errors itself: ErrorHandler decides what visitors see.
+ *   7. Global error handling: warnings become exceptions, uncaught/fatal errors get a safe 500
  *
  * Returns the loaded Config.
  *
+ * NOTE: code before the version check must stay parseable by old PHP versions,
+ * otherwise the check could never show its message. Avoid PHP 8-only SYNTAX here.
  */
 
 use App\Core\Config;
 use App\Core\Env;
+use App\Core\ErrorHandler;
 
 return (static function (): Config {
     $projectRoot = __DIR__;
@@ -94,9 +99,12 @@ return (static function (): Config {
 
     date_default_timezone_set($timezone);
 
-    // 6. Errors: always report and log everything; display only in debug mode
+    // 6. Errors: report and log everything, display nothing.
+    //    If PHP displayed a fatal error itself, it would send "200 OK" headers before
+    //    ErrorHandler could set 500. ErrorHandler shows details itself in debug mode.
     error_reporting(E_ALL);
-    ini_set('display_errors', $config->get('app.debug') ? '1' : '0');
+    ini_set('display_errors', '0');
+    ini_set('display_startup_errors', '0');
     ini_set('log_errors', '1');
 
     $logDirectory = $projectRoot . '/storage/logs';
@@ -113,7 +121,8 @@ return (static function (): Config {
         error_log('[WARNING] bootstrap: storage/logs is not writable; using the server log instead.');
     }
 
-    // Step 12: the ErrorHandler is installed here.
+    // 7. Global error handling (the per-request part is wired in public/index.php, Step 12c)
+    ErrorHandler::registerGlobal($config->get('app.debug'));
 
     return $config;
 })();
