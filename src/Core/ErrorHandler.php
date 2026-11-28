@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Core;
 
 use App\Exceptions\AuthorizationException;
+use App\Exceptions\BusinessRuleException;
+use App\Exceptions\ValidationException;
 use App\Traits\Loggable;
+use App\Traits\Redirects;
 use ErrorException;
 use Throwable;
 
@@ -19,14 +22,18 @@ use Throwable;
  * Request part (instance, used by index.php around the Router):
  *   - notFound()          → 404 page
  *   - methodNotAllowed()  → 405 page (the Router has already sent the Allow header)
- *   - handle($exception)  → 403 for AuthorizationException, 500 for everything else
- *     (Step 12b adds ValidationException and BusinessRuleException)
+ *   - handle($e, $request):
+ *       ValidationException    → back to the form: field errors + typed values (passwords excluded)
+ *       BusinessRuleException  → back to the form: the message as a red flash + typed values
+ *       AuthorizationException → 403 page
+ *       anything else          → 500 page (details only in debug mode)
  *
  * Details are shown on the page only in debug mode; they are always logged.
  */
 final class ErrorHandler
 {
     use Loggable;
+    use Redirects;
 
     private const FATAL_TYPES = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR;
 
@@ -45,6 +52,8 @@ final class ErrorHandler
 
     public function __construct(
         private readonly View $view,
+        private readonly Session $session,
+        private readonly Url $url,
         private readonly bool $debug,
     ) {
         $this->baseBufferLevel = ob_get_level();
@@ -104,18 +113,31 @@ final class ErrorHandler
         $this->renderErrorPage(405, 'errors/405', 'Method not allowed');
     }
 
-    public function handle(Throwable $exception): void
+    public function handle(Throwable $exception, Request $request): void
     {
+        if ($exception instanceof ValidationException) {
+            $this->session->flashData(View::ERRORS_KEY, $exception->errors());
+            $this->session->flashData(View::OLD_INPUT_KEY, $this->oldInput($request));
+            $this->redirectBack($request);
+            return;
+        }
+
+        if ($exception instanceof BusinessRuleException) {
+            // The message is written for users (see BusinessRuleException).
+            $this->session->flash('error', $exception->getMessage());
+            $this->session->flashData(View::OLD_INPUT_KEY, $this->oldInput($request));
+            $this->redirectBack($request);
+            return;
+        }
+
         if ($exception instanceof AuthorizationException) {
-            $this->logWarning('Access denied.', ['reason' => $exception->getMessage()]);
+            $this->logWarning('Access denied.', ['reason' => $exception->getMessage(), 'path' => $request->path()]);
             $this->renderErrorPage(403, 'errors/403', 'Access denied');
             return;
         }
 
-        // Step 12b: ValidationException and BusinessRuleException are handled before this point.
-
         $description = self::describe($exception);
-        $this->logError($description, ['trace' => $exception->getTraceAsString()]);
+        $this->logError($description, ['path' => $request->path(), 'trace' => $exception->getTraceAsString()]);
 
         $detail = $this->debug ? $description . "\n\n" . $exception->getTraceAsString() : null;
         $this->renderErrorPage(500, 'errors/500', 'Something went wrong', $detail);
@@ -123,12 +145,52 @@ final class ErrorHandler
 
     // ------------------------------------------------------------------ helpers
 
-    private function renderErrorPage(int $status, string $template, string $title, ?string $detail = null): void
+    protected function url(): Url
     {
-        // Throw away any half-finished page output.
+        return $this->url;
+    }
+
+    /**
+     * 303 back to the page the form was on (only if it belongs to this app), otherwise to "/".
+     */
+    private function redirectBack(Request $request): void
+    {
+        $this->discardOutput();
+
+        $target = $request->referer();
+        $this->redirect($target['path'] ?? '/', $target['query'] ?? []);
+    }
+
+    /**
+     * Submitted values worth giving back to the form: never passwords, never the CSRF token.
+     *
+     * @return array<string, string|list<string>>
+     */
+    private function oldInput(Request $request): array
+    {
+        $old = [];
+
+        foreach ($request->allInput() as $field => $value) {
+            if ($field === Csrf::FIELD_NAME || stripos($field, 'password') !== false) {
+                continue;
+            }
+
+            $old[$field] = $value;
+        }
+
+        return $old;
+    }
+
+    private function discardOutput(): void
+    {
         while (ob_get_level() > $this->baseBufferLevel) {
             ob_end_clean();
         }
+    }
+
+    private function renderErrorPage(int $status, string $template, string $title, ?string $detail = null): void
+    {
+        $this->discardOutput();
 
         if (!headers_sent()) {
             http_response_code($status);

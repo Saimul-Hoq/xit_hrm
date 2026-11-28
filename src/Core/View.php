@@ -18,11 +18,18 @@ use Throwable;
  *   $view->csrfField()        hidden CSRF input for POST forms
  *   $view->partial('name')    render views/partials/name.php
  *   $view->fieldError($errors, 'field')
+ *   $view->errors()           field errors from the previous (failed) submission
+ *   $view->old('field', $def) value typed in the previous (failed) submission
+ *   $view->oldList('field')   checkbox values from the previous (failed) submission
  *
  * render() RETURNS the HTML: nothing is sent until the controller sends it.
  */
 final class View
 {
+    /** Session flash-data keys written by ErrorHandler after a ValidationException. */
+    public const ERRORS_KEY = 'errors';
+    public const OLD_INPUT_KEY = 'old_input';
+
     /** "admin/dashboard", "partials/flash": lower-case words, digits, "-" and "_". */
     private const NAME_PATTERN = '#^[a-z0-9_-]+(?:/[a-z0-9_-]+)*$#';
 
@@ -117,6 +124,52 @@ final class View
     public function fieldError(array $errors, string $field): string
     {
         return $this->partial('field-error', ['errors' => $errors, 'field' => $field]);
+    }
+
+    /**
+     * Field errors from the previous request's failed submission (empty array if none).
+     *
+     * @return array<string, string>
+     */
+    public function errors(): array
+    {
+        $errors = $this->session->getFlashData(self::ERRORS_KEY, []);
+
+        if (!is_array($errors)) {
+            return [];
+        }
+
+        return array_filter($errors, static fn (mixed $message, mixed $field): bool => is_string($field) && is_string($message), ARRAY_FILTER_USE_BOTH);
+    }
+
+    /**
+     * The value typed into a field before a failed submission, otherwise $default
+     * (e.g. the current database value on an edit form). Passwords are never kept.
+     */
+    public function old(string $field, string $default = ''): string
+    {
+        $old   = $this->session->getFlashData(self::OLD_INPUT_KEY, []);
+        $value = is_array($old) ? ($old[$field] ?? null) : null;
+
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Checkbox values (e.g. departments[]) from before a failed submission, otherwise $default.
+     *
+     * @param list<string> $default
+     * @return list<string>
+     */
+    public function oldList(string $field, array $default = []): array
+    {
+        $old   = $this->session->getFlashData(self::OLD_INPUT_KEY, []);
+        $value = is_array($old) ? ($old[$field] ?? null) : null;
+
+        if (!is_array($value)) {
+            return $default;
+        }
+
+        return array_values(array_filter($value, 'is_string'));
     }
 
     /**

@@ -15,7 +15,8 @@ use RuntimeException;
  *   scoped to the app's base path.
  * - Strict mode: PHP only accepts session IDs it created (fixation defence).
  * - regenerate() after login, destroy() on logout.
- * - Flash messages: stored once, read once.
+ * - Flash MESSAGES: stored once, shown once (takeFlashes).
+ * - Flash DATA: stored for exactly the next request (form errors, typed values).
  *
  * Callers store only small identifiers (e.g. role + id), never copies of user data.
  */
@@ -23,6 +24,12 @@ final class Session
 {
     /** Keys starting with "_" are reserved for this class. */
     private const FLASH_KEY = '_flash';
+
+    /** One-request data readable during THIS request. */
+    private const FLASH_DATA_CURRENT_KEY = '_flash_data';
+
+    /** One-request data stored for the NEXT request. */
+    private const FLASH_DATA_NEXT_KEY = '_flash_data_next';
 
     private const FLASH_TYPES = ['success', 'error', 'warning', 'info'];
 
@@ -87,6 +94,11 @@ final class Session
         if (!$started) {
             throw new RuntimeException('session_start() failed.');
         }
+
+        // Age one-request data: what was stored for "next" becomes readable now,
+        // and the previous batch is dropped (even if no page ever read it).
+        $_SESSION[self::FLASH_DATA_CURRENT_KEY] = $_SESSION[self::FLASH_DATA_NEXT_KEY] ?? [];
+        unset($_SESSION[self::FLASH_DATA_NEXT_KEY]);
     }
 
     public function isStarted(): bool
@@ -192,6 +204,26 @@ final class Session
         unset($_SESSION[self::FLASH_KEY]);
 
         return is_array($flashes) ? array_values($flashes) : [];
+    }
+
+    /**
+     * Stores data readable during the NEXT request only (e.g. form errors, typed values).
+     */
+    public function flashData(string $key, mixed $value): void
+    {
+        $this->assertStarted();
+
+        $_SESSION[self::FLASH_DATA_NEXT_KEY][$key] = $value;
+    }
+
+    /**
+     * Reads one-request data stored by the PREVIOUS request. Can be read any number of times.
+     */
+    public function getFlashData(string $key, mixed $default = null): mixed
+    {
+        $this->assertStarted();
+
+        return $_SESSION[self::FLASH_DATA_CURRENT_KEY][$key] ?? $default;
     }
 
     private function assertStarted(): void

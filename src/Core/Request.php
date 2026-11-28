@@ -10,10 +10,13 @@ namespace App\Core;
  * - Nothing else in the application reads $_GET, $_POST or $_SERVER.
  * - path() is whitelist-normalized: anything unexpected becomes null (-> 404).
  * - Values are returned as strings or lists of strings only, never raw arrays.
+ * - referer() returns the previous page ONLY if it belongs to this application.
  */
 final class Request
 {
     private const MAX_PATH_LENGTH = 255;
+
+    private const MAX_REFERER_LENGTH = 2048;
 
     /** "/" or "/segment/segment..." where a segment is [A-Za-z0-9_-]+ */
     private const PATH_PATTERN = '#^/(?:[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*)?$#';
@@ -21,6 +24,9 @@ final class Request
     private readonly string $method;
     private readonly ?string $path;
     private readonly bool $https;
+
+    /** @var array{path: string, query: array<string, string|list<string>>}|null */
+    private readonly ?array $referer;
 
     /**
      * @param array<string, mixed> $server   Usually $_SERVER
@@ -34,9 +40,10 @@ final class Request
         private readonly array $body,
         string $basePath,
     ) {
-        $this->method = self::normalizeMethod($server['REQUEST_METHOD'] ?? 'GET');
-        $this->path   = self::normalizePath($server['REQUEST_URI'] ?? '/', $basePath);
-        $this->https  = self::detectHttps($server);
+        $this->method  = self::normalizeMethod($server['REQUEST_METHOD'] ?? 'GET');
+        $this->path    = self::normalizePath($server['REQUEST_URI'] ?? '/', $basePath);
+        $this->https   = self::detectHttps($server);
+        $this->referer = self::normalizeReferer($server, $basePath);
     }
 
     public static function fromGlobals(string $basePath): self
@@ -69,6 +76,17 @@ final class Request
     public function isHttps(): bool
     {
         return $this->https;
+    }
+
+    /**
+     * The page the user came from, as an application path + query,
+     * or null if there is none or it is not a page of THIS application.
+     *
+     * @return array{path: string, query: array<string, string|list<string>>}|null
+     */
+    public function referer(): ?array
+    {
+        return $this->referer;
     }
 
     /**
@@ -105,6 +123,17 @@ final class Request
     public function inputList(string $key): array
     {
         return self::stringList($this->body, $key);
+    }
+
+    /**
+     * Every POST field that is a string or a list of strings (anything else is dropped).
+     * Used to give a failed form its typed values back.
+     *
+     * @return array<string, string|list<string>>
+     */
+    public function allInput(): array
+    {
+        return self::plainValues($this->body);
     }
 
     private static function normalizeMethod(mixed $raw): string
@@ -161,6 +190,49 @@ final class Request
     }
 
     /**
+     * Accepts the Referer header only if it points to this same site and application.
+     *
+     * @param array<string, mixed> $server
+     * @return array{path: string, query: array<string, string|list<string>>}|null
+     */
+    private static function normalizeReferer(array $server, string $basePath): ?array
+    {
+        $referer = $server['HTTP_REFERER'] ?? null;
+        $host    = $server['HTTP_HOST'] ?? null;
+
+        if (!is_string($referer) || !is_string($host) || $referer === '' || strlen($referer) > self::MAX_REFERER_LENGTH) {
+            return null;
+        }
+
+        $parts = parse_url($referer);
+
+        if (!is_array($parts) || !isset($parts['scheme'], $parts['host'])) {
+            return null;
+        }
+
+        if (!in_array(strtolower($parts['scheme']), ['http', 'https'], true)) {
+            return null;
+        }
+
+        // Same host AND same port as this request ("127.0.0.1:8000", "hrm.example.com").
+        $refererHost = strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '');
+
+        if ($refererHost !== strtolower($host)) {
+            return null;
+        }
+
+        $path = self::normalizePath($parts['path'] ?? '/', $basePath);
+
+        if ($path === null) {
+            return null;
+        }
+
+        parse_str($parts['query'] ?? '', $query);
+
+        return ['path' => $path, 'query' => self::plainValues($query)];
+    }
+
+    /**
      * @param array<string, mixed> $server
      */
     private static function detectHttps(array $server): bool
@@ -175,7 +247,7 @@ final class Request
     }
 
     /**
-     * @param array<string, mixed> $source
+     * @param array<array-key, mixed> $source
      */
     private static function stringValue(array $source, string $key): ?string
     {
@@ -185,7 +257,7 @@ final class Request
     }
 
     /**
-     * @param array<string, mixed> $source
+     * @param array<array-key, mixed> $source
      * @return list<string>
      */
     private static function stringList(array $source, string $key): array
@@ -197,5 +269,31 @@ final class Request
         }
 
         return array_values(array_filter($value, 'is_string'));
+    }
+
+    /**
+     * Keeps string-keyed entries whose value is a string or a list of strings.
+     * Nested structures (?a[b]=c, ?x[]=1&x[][]=2) are dropped.
+     *
+     * @param array<array-key, mixed> $source
+     * @return array<string, string|list<string>>
+     */
+    private static function plainValues(array $source): array
+    {
+        $clean = [];
+
+        foreach ($source as $key => $value) {
+            if (!is_string($key)) {
+                continue;
+            }
+
+            if (is_string($value)) {
+                $clean[$key] = $value;
+            } elseif (is_array($value) && array_is_list($value) && $value === array_filter($value, 'is_string')) {
+                $clean[$key] = $value;
+            }
+        }
+
+        return $clean;
     }
 }
