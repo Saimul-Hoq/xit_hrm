@@ -1,0 +1,27 @@
+# XIT HRM - Apache rules for the public/ folder (the document root).
+
+# Never list folder contents.
+Options -Indexes
+
+# The front controller is index.php.
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Real files (CSS, JS, images) are served by Apache directly.
+    # Everything else - including folders like /assets/ - goes to index.php,
+    # which routes it (or answers with our own 404 page).
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# Hidden files (".something") are never served, even if one ends up in public/ by mistake.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Static files also get nosniff (PHP responses set their own security headers).
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+</IfModule>
