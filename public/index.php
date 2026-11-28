@@ -22,6 +22,11 @@ use App\Core\Router;
 use App\Core\Session;
 use App\Core\Url;
 use App\Core\View;
+use App\Middleware\AdminMiddleware;
+use App\Middleware\GuestMiddleware;
+use App\Repositories\AdminRepository;
+use App\Services\AuthService;
+use App\Validators\LoginValidator;
 
 $projectRoot = dirname(__DIR__);
 
@@ -62,16 +67,29 @@ $errorHandler = new ErrorHandler($view, $session, $url, $config->get('app.debug'
 // ---------------------------------------------------------------- 4. lazy factories
 /**
  * Class name => how to build it. A factory receives $resolve to ask for other objects.
- * Nothing here is built until a matched route needs it.
- *
- * Example (Step 15):
- *   AdminAuthController::class => static fn (Closure $resolve): object => new AdminAuthController(
- *       $resolve(AuthService::class), $view, $csrf, $url
- *   ),
+ * Nothing here is built until a matched route needs it, and each is built at most once per request.
  *
  * @var array<string, Closure(Closure): object> $factories
  */
 $factories = [
+    // Repositories
+    AdminRepository::class => static fn (Closure $resolve): object => new AdminRepository($database, $clock),
+
+    // Services
+    AuthService::class => static fn (Closure $resolve): object => new AuthService(
+        $resolve(AdminRepository::class),
+        $session,
+        $csrf,
+    ),
+
+    // Validators
+    LoginValidator::class => static fn (Closure $resolve): object => new LoginValidator(),
+
+    // Middleware
+    GuestMiddleware::class => static fn (Closure $resolve): object => new GuestMiddleware($resolve(AuthService::class)),
+    AdminMiddleware::class => static fn (Closure $resolve): object => new AdminMiddleware($resolve(AuthService::class)),
+
+    // Controllers: from Step 15
 ];
 
 /** @var array<string, object> $instances Objects already built during this request. */
